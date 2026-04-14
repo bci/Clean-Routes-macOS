@@ -1,0 +1,22 @@
+#!/usr/bin/env zsh
+# Mock networksetup for bats tests.
+# Returns deterministic, instant output so tests never hang on live interfaces.
+
+case "${1:-}" in
+  -listallnetworkservices)
+    echo "An asterisk (*) denotes that a network service is disabled."
+    echo "Wi-Fi"
+    echo "Ethernet"
+    ;;
+  -getadditionalroutes)
+    # Return truly empty output — no additional routes configured for any service
+    ;;
+  -setadditionalroutes)
+    # Write-op — succeed silently
+    exit 0
+    ;;
+  *)
+    # Anything else: succeed silently (e.g. -setdnsservers called in dry-run paths)
+    exit 0
+    ;;
+esac

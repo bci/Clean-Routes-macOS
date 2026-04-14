@@ -1,0 +1,29 @@
+{
+  "sets": {
+    "office": [
+      { "dest": "10.0.0.0/8",    "gateway": "192.168.1.1" },
+      { "dest": "172.16.0.0/12", "gateway": "192.168.1.1" }
+    ],
+    "vpn": [
+      { "dest": "10.50.0.0/16", "gateway": "10.0.0.1", "interface": "en0" }
+    ]
+  },
+  "dns": {
+    "local_router": "192.168.1.1",
+    "profiles": {
+      "corp": {
+        "domain":      "corp.example.com",
+        "nameservers": ["10.1.0.53", "10.1.0.54"],
+        "networks":    ["10.1.0.0/16"],
+        "test_host":   "dc01.corp.example.com",
+        "ping_host":   "dc01.corp.example.com"
+      },
+      "dev": {
+        "domain":      "dev.local",
+        "nameservers": ["10.2.0.1"],
+        "networks":    ["10.2.0.0/24"],
+        "test_host":   "devserver.dev.local"
+      }
+    }
+  }
+}

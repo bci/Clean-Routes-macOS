@@ -1,0 +1,15 @@
+# ── Site-specific shortcut scripts ───────────────────────────────────────────
+# These scripts contain real IPs, hostnames, and domain names for specific
+# client sites and should never be committed to the public repository.
+local/
+
+# ── macOS system files ────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+*.swo
+*~
+
+# ── Editor / tool artefacts ───────────────────────────────────────────────────
+.idea/
+.vscode/
+*.tmp

@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    name: lint + test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-13]
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify python3 is available
+        run: python3 --version
+
+      - name: Make scripts executable
+        run: chmod +x *.sh
+
+      - name: Lint + test
+        run: make all
+        env:
+          # Tells tests they're in CI — used to skip live-network and root-only tests
+          CI: "true"
