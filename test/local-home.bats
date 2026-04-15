@@ -22,6 +22,11 @@ setup() {
   load 'libs/bats-assert/load'
   common_setup
 
+  # local/home.sh is gitignored — skip the whole file when not present (CI).
+  if [[ ! -f "${REPO_ROOT}/local/home.sh" ]]; then
+    skip "local/home.sh not present (gitignored; run locally)"
+  fi
+
   export HOME="${TEST_TMP}"
   CONFIG_DIR="${TEST_TMP}/.config/macos-routes"
   mkdir -p "${CONFIG_DIR}"

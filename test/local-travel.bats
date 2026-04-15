@@ -21,6 +21,11 @@ setup() {
   load 'libs/bats-assert/load'
   common_setup
 
+  # local/travel.sh is gitignored — skip the whole file when not present (CI).
+  if [[ ! -f "${REPO_ROOT}/local/travel.sh" ]]; then
+    skip "local/travel.sh not present (gitignored; run locally)"
+  fi
+
   # Redirect HOME so travel.sh and every dns-macos-routes.sh it spawns share
   # the same routes.json without touching the real user config.
   export HOME="${TEST_TMP}"
