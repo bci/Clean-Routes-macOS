@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+# mock-bin/dscacheutil — stub: always returns no result (host not found)
+# Prevents live DNS lookups during tests.
+exit 0

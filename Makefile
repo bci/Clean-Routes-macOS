@@ -1,7 +1,7 @@
 BATS     := test/libs/bats-core/bin/bats
 TEST_DIR := test
 SCRIPTS  := dns-macos-routes.sh add-macos-routes.sh clean-macos-routes.sh \
-            diagnose-macos-routes.sh watch-macos-routes.sh \
+            diagnose-macos-routes.sh report-macos-routes.sh watch-macos-routes.sh \
             backup-restore-routes.sh reset-macos-network.sh \
             lib/common.sh
 
@@ -20,7 +20,9 @@ TEST_FILES := test/add-macos-routes.bats \
               test/clean-macos-routes.bats \
               test/diagnose-macos-routes.bats \
               test/dns-macos-routes.bats \
-              test/reset-macos-network.bats
+              test/reset-macos-network.bats \
+              test/local-travel.bats \
+              test/local-home.bats
 
 .PHONY: help test lint lint-scripts lint-tests all install-hooks setup _check-timeout
 

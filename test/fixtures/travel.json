@@ -1,0 +1,21 @@
+{
+  "sets": {},
+  "dns": {
+    "local_router": "192.168.1.1",
+    "profiles": {
+      "gardena": {
+        "domain":      "ci.gardena.ca.us",
+        "nameservers": ["10.10.0.53", "10.10.0.54"],
+        "networks":    ["10.10.0.0/16", "172.20.0.0/14"],
+        "test_host":   "intranet.ci.gardena.ca.us",
+        "ping_host":   "10.10.0.1"
+      },
+      "mde": {
+        "domain":      "mde.local",
+        "nameservers": ["10.20.0.53"],
+        "networks":    ["10.20.0.0/16"],
+        "test_host":   "dc01.mde.local"
+      }
+    }
+  }
+}

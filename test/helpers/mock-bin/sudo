@@ -1,0 +1,3 @@
+#!/usr/bin/env zsh
+# mock-bin/sudo — pass-through stub so tests don't need real root
+exec "$@"

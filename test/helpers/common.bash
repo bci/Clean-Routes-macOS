@@ -8,7 +8,7 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
 
 # Fixture paths
-FIXTURE_DIR="${REPO_ROOT}/test/fixtures"
+export FIXTURE_DIR="${REPO_ROOT}/test/fixtures"
 FIXTURE_FULL="${FIXTURE_DIR}/routes.json"
 export FIXTURE_EMPTY="${FIXTURE_DIR}/empty.json"
 export FIXTURE_INVALID="${FIXTURE_DIR}/invalid.json"

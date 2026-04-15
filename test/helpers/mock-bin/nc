@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+# mock-bin/nc — stub for netcat used in _test_profile DNS port checks.
+# Always reports the port as open (exit 0) so tests don't make live connections.
+exit 0

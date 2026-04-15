@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+# mock-bin/ping — stub: always returns unreachable (exit 1) instantly.
+# Prevents live network pings during tests.
+exit 1

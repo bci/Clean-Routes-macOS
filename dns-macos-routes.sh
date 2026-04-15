@@ -29,6 +29,18 @@ DELETE_NAME=""
 RENAME_OLD=""
 RENAME_NEW=""
 
+# Pick the first available timeout binary (gtimeout on macOS via coreutils, timeout on Linux)
+_timeout_cmd() {
+  local secs="$1"; shift
+  if command -v gtimeout &>/dev/null; then
+    gtimeout "$secs" "$@"
+  elif command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
 usage() {
   cat << 'USAGE'
 Usage: dns-macos-routes.sh [OPTIONS]
@@ -249,7 +261,7 @@ out = subprocess.run(
     capture_output=True, text=True
 ).stdout
 for line in out.splitlines():
-    if "aren't any" in line or "There aren" in line:
+    if "aren't any" in line or "There aren" in line or "There are" in line:
         continue
     parts = line.split()
     if len(parts) >= 3:
@@ -311,6 +323,8 @@ out = subprocess.run(
     capture_output=True, text=True
 ).stdout
 for line in out.splitlines():
+    if "aren't any" in line or "There aren" in line or "There are" in line:
+        continue
     parts = line.split()
     if len(parts) >= 3:
         existing.append((parts[0], parts[1], parts[2]))
@@ -345,35 +359,85 @@ PYEOF
   fi
 }
 
-# Run dscacheutil + ping tests for a profile
+# Returns 0 if argument looks like an IPv4 or IPv6 address, 1 if it's a hostname.
+_is_ip() {
+  python3 -c "
+import sys, ipaddress
+try:
+    ipaddress.ip_address(sys.argv[1]); sys.exit(0)
+except ValueError:
+    sys.exit(1)
+" "$1" 2>/dev/null
+}
+
+# Run dscacheutil + ping tests for a profile.
+# Prints per-check results and echoes "PASS" or "FAIL" on its last line
+# so do_test can collect a summary.
 _test_profile() {
   local name="$1"
   local profile_json="$2"
 
-  local test_host ping_host
+  local test_host ping_host nameservers_json
   test_host=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('test_host',''))" "$profile_json" 2>/dev/null || true)
   ping_host=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('ping_host',''))" "$profile_json" 2>/dev/null || true)
+  nameservers_json=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print('\n'.join(d.get('nameservers',[])))" "$profile_json" 2>/dev/null || true)
+
+  local profile_ok=1  # 1=pass until a check fails
+  local ns_any_open=0  # set to 1 if at least one NS answers on port 53
+  local dns_resolved=0 # set to 1 if dscacheutil succeeds
 
   info "  Testing profile: $name"
+
+  # ── nameserver reachability (TCP port 53) ──────────────────────────────────
+  if [[ -n "$nameservers_json" ]]; then
+    while IFS= read -r ns; do
+      [[ -z "$ns" ]] && continue
+      if _timeout_cmd 2 nc -z "$ns" 53 &>/dev/null 2>&1; then
+        ok "    DNS port  $ns:53 → [OPEN]"
+        ns_any_open=1
+      else
+        warn "    DNS port  $ns:53 → [UNREACHABLE]"
+        profile_ok=0
+      fi
+    done <<< "$nameservers_json"
+  fi
+
+  # ── DNS resolution via dscacheutil ────────────────────────────────────────
+  local resolved
   if [[ -n "$test_host" ]]; then
-    local resolved
-    resolved=$(dscacheutil -q host -a name "$test_host" 2>/dev/null | awk '/ip_address/ {print $2}' | tr '\n' ' ' || true)
-    if [[ -n "$resolved" ]]; then
-      ok "    dscacheutil $test_host → $resolved"
+    if [[ -n "$nameservers_json" && $ns_any_open -eq 0 ]]; then
+      warn "    dscacheutil $test_host → [SKIPPED — no nameservers reachable]"
+      profile_ok=0
     else
-      warn "    dscacheutil $test_host → [FAILED]"
+      resolved=$(_timeout_cmd 5 dscacheutil -q host -a name "$test_host" 2>/dev/null | awk '/ip_address/ {print $2}' | tr '\n' ' ' || true)
+      if [[ -n "$resolved" ]]; then
+        ok "    dscacheutil $test_host → $resolved"
+        dns_resolved=1
+      else
+        warn "    dscacheutil $test_host → [FAILED]"
+        profile_ok=0
+      fi
     fi
   else
     info "    (no test_host configured)"
+    dns_resolved=1  # no DNS check configured — don't block ping
   fi
 
+  # ── ICMP ping ─────────────────────────────────────────────────────────────
   if [[ -n "$ping_host" ]]; then
-    if ping -c2 -W2 "$ping_host" &>/dev/null; then
-      ok "    ping $ping_host → [REACHABLE]"
+    if [[ $dns_resolved -eq 0 ]] && ! _is_ip "$ping_host"; then
+      warn "    ping      $ping_host → [SKIPPED — DNS failed]"
+      profile_ok=0
+    elif _timeout_cmd 10 ping -c2 -W2 "$ping_host" &>/dev/null; then
+      ok "    ping      $ping_host → [REACHABLE]"
     else
-      warn "    ping $ping_host → [UNREACHABLE]"
+      warn "    ping      $ping_host → [UNREACHABLE]"
+      profile_ok=0
     fi
   fi
+
+  # Exit 0 = all checks passed, 1 = at least one failed
+  return $(( 1 - profile_ok ))
 }
 
 # ── action: list ──────────────────────────────────────────────────────────────
@@ -458,8 +522,9 @@ do_apply() {
     [[ $VERBOSE -eq 1 ]] && info "Using network service: $svc"
   fi
 
+  local profile_json domain router
+  local -a nameservers
   for name in "${PROFILE_NAMES[@]}"; do
-    local profile_json domain nameservers
     profile_json=$(_get_profile_json "$name") || exit 1
     domain=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('domain',''))" "$profile_json")
     [[ -z "$domain" ]] && { err "Profile '$name' has no 'domain' field."; exit 1; }
@@ -480,7 +545,6 @@ do_apply() {
     fi
 
     if [[ $WITH_ROUTES -eq 1 ]]; then
-      local router
       router=$(_resolve_router "$profile_json")
       info "  Applying routes for '$name' via $svc (router: ${router:-MISSING})"
       _apply_routes_for_profile "$profile_json" "$svc" "$router"
@@ -498,20 +562,28 @@ do_remove() {
   require_root
   [[ -f "$ROUTES_FILE" ]] || { err "Routes file not found: $ROUTES_FILE"; exit 1; }
 
-  local svc=""
+  # When --with-routes is set and no explicit --service override, collect ALL
+  # network services so routes are cleared from every interface they may have
+  # been installed on (e.g. home.sh ran on Wi-Fi, now we're on USB ACM).
+  local -a target_services
   if [[ $WITH_ROUTES -eq 1 ]]; then
-    svc=$(_active_service)
-    [[ -z "$svc" ]] && { err "Could not determine an active network service. Use --service <svc>."; exit 1; }
-    [[ $VERBOSE -eq 1 ]] && info "Using network service: $svc"
+    if [[ -n "$NETWORK_SERVICE_OVERRIDE" ]]; then
+      target_services=("$NETWORK_SERVICE_OVERRIDE")
+    else
+      while IFS= read -r svc; do
+        [[ -n "$svc" ]] && target_services+=("$svc")
+      done < <(ns_list_services)
+      [[ ${#target_services[@]} -eq 0 ]] && { err "No network services found."; exit 1; }
+    fi
   fi
 
+  local profile_json domain resolver_file svc
   for name in "${PROFILE_NAMES[@]}"; do
-    local profile_json domain
     profile_json=$(_get_profile_json "$name") || exit 1
     domain=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('domain',''))" "$profile_json")
     [[ -z "$domain" ]] && { err "Profile '$name' has no 'domain' field."; exit 1; }
 
-    local resolver_file="${RESOLVER_DIR}/${domain}"
+    resolver_file="${RESOLVER_DIR}/${domain}"
     if [[ -f "$resolver_file" ]]; then
       info "Removing ${resolver_file}"
       run_or_echo "rm -f \"$resolver_file\""
@@ -520,8 +592,10 @@ do_remove() {
     fi
 
     if [[ $WITH_ROUTES -eq 1 ]]; then
-      info "  Removing routes for '$name' via $svc"
-      _remove_routes_for_profile "$profile_json" "$svc"
+      for svc in "${target_services[@]}"; do
+        info "  Removing routes for '$name' via $svc"
+        _remove_routes_for_profile "$profile_json" "$svc"
+      done
     fi
   done
 
@@ -557,19 +631,22 @@ do_remove_all() {
 do_diff() {
   [[ -f "$ROUTES_FILE" ]] || { err "Routes file not found: $ROUTES_FILE"; exit 1; }
 
+  local profile_json domain test_host ping_host resolver_file svc router
+  local additional_routes resolved
+  local -a networks
+  local dest_mask dest ar_dest ar_mask ar_gw p_dest_mask p_dest p_mask found_in_profile cidr
+
   for name in "${DIFF_NAMES[@]}"; do
-    local profile_json
     profile_json=$(_get_profile_json "$name") || exit 1
 
-    local domain nameservers networks router
     domain=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('domain',''))" "$profile_json")
     test_host=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('test_host',''))" "$profile_json" 2>/dev/null || true)
     ping_host=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('ping_host',''))" "$profile_json" 2>/dev/null || true)
 
     printf "\nProfile: %s  (domain: %s)\n" "$name" "$domain"
 
-    # Resolver file check
-    local resolver_file="${RESOLVER_DIR}/${domain}"
+    # ── Resolver file ────────────────────────────────────────────────────────
+    resolver_file="${RESOLVER_DIR}/${domain}"
     printf "\nResolver file (%s):\n" "$resolver_file"
     while IFS= read -r ns; do
       [[ -z "$ns" ]] && continue
@@ -579,28 +656,22 @@ do_diff() {
         printf "  nameserver %-20s [MISSING]\n" "$ns"
       fi
     done < <(python3 -c "import sys,json; d=json.loads(sys.argv[1]); [print(n) for n in d.get('nameservers',[])]" "$profile_json")
+    [[ ! -f "$resolver_file" ]] && printf "  (resolver file MISSING)\n"
 
-    if [[ ! -f "$resolver_file" ]]; then
-      printf "  (resolver file MISSING)\n"
-    fi
-
-    # Routes check
+    # ── Routes ───────────────────────────────────────────────────────────────
     networks=()
     while IFS= read -r net; do
       [[ -n "$net" ]] && networks+=("$net")
     done < <(python3 -c "import sys,json; d=json.loads(sys.argv[1]); [print(n) for n in d.get('networks',[])]" "$profile_json")
 
     if [[ ${#networks[@]} -gt 0 ]]; then
-      local svc router
       svc=$(_active_service)
       router=$(_resolve_router "$profile_json")
 
       printf "\nRoutes (via networksetup, service: %s):\n" "$svc"
-      local additional_routes
       additional_routes=$(ns_get_additional_routes "$svc")
 
       for cidr in "${networks[@]}"; do
-        local dest_mask dest
         dest_mask=$(cidr_to_dest_mask "$cidr")
         dest=$(awk '{print $1}' <<< "$dest_mask")
         if echo "$additional_routes" | grep -q "^$dest"; then
@@ -611,44 +682,43 @@ do_diff() {
       done
 
       # Extra routes in networksetup not in profile
-      if [[ -n "$additional_routes" && ! "$additional_routes" =~ "aren't any" ]]; then
-        while IFS= read -r line; do
-          [[ -z "$line" ]] && continue
-          local ar_dest ar_mask ar_gw
-          ar_dest=$(awk '{print $1}' <<< "$line")
-          ar_mask=$(awk '{print $2}' <<< "$line")
-          local found_in_profile=0
-          for cidr in "${networks[@]}"; do
-            local p_dest_mask p_dest p_mask
-            p_dest_mask=$(cidr_to_dest_mask "$cidr")
-            p_dest=$(awk '{print $1}' <<< "$p_dest_mask")
-            p_mask=$(awk '{print $2}' <<< "$p_dest_mask")
-            [[ "$ar_dest" == "$p_dest" && "$ar_mask" == "$p_mask" ]] && { found_in_profile=1; break; }
-          done
-          if [[ $found_in_profile -eq 0 ]]; then
-            ar_gw=$(awk '{print $3}' <<< "$line")
-            printf "  %-20s -> %-18s [EXTRA]\n" "$ar_dest/$ar_mask" "$ar_gw"
-          fi
-        done <<< "$additional_routes"
-      fi
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        [[ "$line" == *"aren't any"* || "$line" == *"There are"* || "$line" == *"There aren"* ]] && continue
+        ar_dest=$(awk '{print $1}' <<< "$line")
+        ar_mask=$(awk '{print $2}' <<< "$line")
+        ar_gw=$(awk '{print $3}' <<< "$line")
+        [[ -z "$ar_dest" || -z "$ar_mask" || -z "$ar_gw" ]] && continue
+        found_in_profile=0
+        for cidr in "${networks[@]}"; do
+          p_dest_mask=$(cidr_to_dest_mask "$cidr")
+          p_dest=$(awk '{print $1}' <<< "$p_dest_mask")
+          p_mask=$(awk '{print $2}' <<< "$p_dest_mask")
+          [[ "$ar_dest" == "$p_dest" && "$ar_mask" == "$p_mask" ]] && { found_in_profile=1; break; }
+        done
+        [[ $found_in_profile -eq 0 ]] && printf "  %-20s -> %-18s [EXTRA]\n" "$ar_dest/$ar_mask" "$ar_gw"
+      done <<< "$additional_routes"
     fi
 
-    # DNS test
+    # ── DNS test ─────────────────────────────────────────────────────────────
+    local diff_dns_ok=0
     if [[ -n "$test_host" ]]; then
       printf "\nDNS test (test_host: %s):\n" "$test_host"
-      local resolved
-      resolved=$(dscacheutil -q host -a name "$test_host" 2>/dev/null | awk '/ip_address/ {print $2}' | tr '\n' ' ' || true)
+      resolved=$(_timeout_cmd 5 dscacheutil -q host -a name "$test_host" 2>/dev/null | awk '/ip_address/ {print $2}' | tr '\n' ' ' || true)
       if [[ -n "$resolved" ]]; then
         printf "  [RESOLVED]  %s\n" "$resolved"
+        diff_dns_ok=1
       else
         printf "  [FAILED]\n"
       fi
     fi
 
-    # Ping test
+    # ── Ping test ─────────────────────────────────────────────────────────────
     if [[ -n "$ping_host" ]]; then
       printf "\nPing test (ping_host: %s):\n" "$ping_host"
-      if ping -c2 -W2 "$ping_host" &>/dev/null; then
+      if [[ $diff_dns_ok -eq 0 ]] && ! _is_ip "$ping_host"; then
+        printf "  [SKIPPED — DNS failed]\n"
+      elif _timeout_cmd 10 ping -c2 -W2 "$ping_host" &>/dev/null; then
         printf "  [REACHABLE]\n"
       else
         printf "  [UNREACHABLE]\n"
@@ -969,11 +1039,40 @@ do_flush_cache() {
 do_test() {
   [[ -f "$ROUTES_FILE" ]] || { err "Routes file not found: $ROUTES_FILE"; exit 1; }
 
+  local -a summary_names summary_statuses
+  local pass_count=0 fail_count=0
+  local profile_json
+
   for name in "${PROFILE_NAMES[@]}"; do
-    local profile_json
     profile_json=$(_get_profile_json "$name") || exit 1
-    _test_profile "$name" "$profile_json"
+    echo
+    if _test_profile "$name" "$profile_json"; then
+      summary_names+=("$name"); summary_statuses+=("PASS"); (( pass_count++ )) || true
+    else
+      summary_names+=("$name"); summary_statuses+=("FAIL"); (( fail_count++ )) || true
+    fi
   done
+
+  # ── summary table ───────────────────────────────────────────────────────────
+  echo
+  echo "───────────────────────────────────────────────"
+  echo " Connectivity Summary"
+  echo "───────────────────────────────────────────────"
+  local i
+  for (( i = 1; i <= ${#summary_names[@]}; i++ )); do
+    if [[ "${summary_statuses[$i]}" == "PASS" ]]; then
+      ok "  ${summary_names[$i]}"
+    else
+      warn "  ${summary_names[$i]} — UNREACHABLE"
+    fi
+  done
+  echo "───────────────────────────────────────────────"
+  if [[ $fail_count -eq 0 ]]; then
+    ok "  All $pass_count profile(s) reachable"
+  else
+    warn "  $pass_count passed / $fail_count failed — check VPN / network"
+  fi
+  echo "───────────────────────────────────────────────"
 }
 
 # ── dispatch ──────────────────────────────────────────────────────────────────
