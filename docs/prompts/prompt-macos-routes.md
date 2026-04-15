@@ -403,6 +403,11 @@ or ignore them if they don't fit the design. Nothing here is mandatory.
 - **`diagnose-macos-routes.sh`** — read-only diagnostic: show routing table,
   ARP cache, DNS servers, active VPN interfaces, and default gateway reachability
   in a single formatted report. No `sudo` required.
+- **`report-macos-routes.sh`** ✅ **implemented** — one-shot snapshot report
+  covering `/etc/resolver/` conditional DNS entries, per-service
+  `networksetup -getadditionalroutes` (with `[OK]`/`[EXTRA]` tagging against
+  `routes.json`), a filtered kernel routing table, and active VPN/tunnel
+  interfaces. No `sudo`. Flags: `--no-color`, `--routes-json <path>`.
 - **`watch-macos-routes.sh`** — continuously monitor the routing table for changes
   (poll `netstat` or use `route monitor`) and log additions/removals with timestamps.
 - **`backup-restore-routes.sh`** — dedicated snapshot/restore tool: save the full

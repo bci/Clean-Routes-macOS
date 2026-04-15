@@ -22,6 +22,7 @@ dscacheutil, scutil).
 | `add-macos-routes.sh` | ✅ | Add, list, diff, and delete named route sets |
 | `clean-macos-routes.sh` | ✅ | Remove static routes by network pattern or set |
 | `diagnose-macos-routes.sh` | — | Read-only diagnostics (routing table, DNS, VPN, ARP) |
+| `report-macos-routes.sh` | — | Snapshot report: conditional DNS, per-service routes, kernel table, VPN tunnels |
 | `watch-macos-routes.sh` | — | Poll routing table and `/etc/resolver/` for changes |
 | `backup-restore-routes.sh` | restore: ✅ | JSON snapshot, restore, diff, and prune for routes |
 | `reset-macos-network.sh` | ✅ | Flush routes, caches, cycle interfaces, reset to DHCP |
@@ -254,6 +255,39 @@ The JSON output includes a `"conditional_dns"` key mapping each filename in
 
 ---
 
+### `report-macos-routes.sh`
+
+Read-only snapshot report. No root required. Colour-aware (respects `NO_COLOR` and TTY detection).
+
+Produces four sections in one pass:
+
+| Section | Source |
+| ------- | ------ |
+| **Conditional DNS** | Every file in `/etc/resolver/` with its `nameserver`/`domain` lines |
+| **Static Routes** | `networksetup -getadditionalroutes` for every service; routes cross-checked against `routes.json` and tagged `[OK]` or `[EXTRA]` |
+| **Kernel Routing Table** | `netstat -rn -f inet` filtered to gateway/tunnel entries; noise (ARP, multicast, loopback) stripped |
+| **VPN / Tunnel Interfaces** | Any `utun*`, `ppp*`, or `ipsec*` interface with a bound IP, plus MTU |
+
+```bash
+# Colour report (auto-detected)
+report-macos-routes.sh
+
+# Plain text (safe for logs / copy-paste)
+report-macos-routes.sh --no-color
+
+# Use a non-default routes.json for [OK]/[EXTRA] tagging
+report-macos-routes.sh --routes-json /path/to/routes.json
+```
+
+**Options:**
+
+| Flag | Description |
+| ---- | ----------- |
+| `--no-color` | Disable ANSI colour output |
+| `--routes-json <path>` | JSON file used to classify routes as `[OK]` vs `[EXTRA]` (default: `~/.config/macos-routes/routes.json`) |
+
+---
+
 ### `watch-macos-routes.sh`
 
 Poll the routing table and `/etc/resolver/` for changes.
@@ -459,6 +493,12 @@ conflict with what the VPN client installs.
 ## Diagnostics Quick Reference
 
 ```bash
+# Quick snapshot of everything (DNS, routes, kernel table, VPN tunnels)
+report-macos-routes.sh
+
+# Same, plain text for sharing / pasting into a ticket
+report-macos-routes.sh --no-color
+
 # Are my resolver files in place?
 diagnose-macos-routes.sh | grep -A10 "Conditional DNS"
 
